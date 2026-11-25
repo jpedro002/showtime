@@ -1,64 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import type { Question } from '../data'
-import { DECK, DECK_TITLE, PIN, POLL, SEED_Q } from '../data'
-import { QR, Slide } from '../Slide'
-import { Bar, btn, Chip, cx, LiveDot, Logo, Switch, Toast } from '../ui'
+import { DECK, DECK_TITLE, PIN, POLL } from '../data'
+import { EMOJI, N, Stage, useRoom } from '../room'
+import { Slide } from '../Slide'
+import { Bar, btn, Check, Chip, cx, LiveDot, Logo, Switch, Toast } from '../ui'
 
-type Kind = 'fogo' | 'palmas' | 'uau'
-const EMOJI: Record<Kind, string> = { fogo: '🔥', palmas: '👏', uau: '😮' }
-const R_BG: Record<Kind, string> = { fogo: 'from-orange-400 to-orange-600', palmas: 'from-emerald-300 to-emerald-500', uau: 'from-lime-200 to-lime-400' }
-const N = DECK.length
-const TOTAL_SEC = 45 * 60
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
-const pad = (n: number) => String(n).padStart(2, '0')
-const byRank = (a: Question, b: Question) => Number(a.answered) - Number(b.answered) || b.votes - a.votes
-
-type Poll = { status: 'idle' | 'open' | 'closed'; onStage: boolean; myVote: number | null; votes: number[] }
-type S = {
-  cur: number; follow: boolean; audView: number; tab: 'notas' | 'qa' | 'poll'
-  notes: Record<number, string>; draft: string; anon: boolean; cooldown: number; nextId: number
-  questions: Question[]; pinned: string | null; moderation: boolean
-  reacts: { id: number; kind: Kind; left: number; born: number }[]; rId: number; totals: Record<Kind, number>
-  poll: Poll; elapsed: number; online: number; showQr: boolean
-}
-const IDLE_POLL: Poll = { status: 'idle', onStage: false, myVote: null, votes: [0, 0, 0, 0] }
-const INIT: S = {
-  cur: 4, follow: true, audView: 4, tab: 'notas',
-  notes: { 2: 'Escala horizontal > vertical\n— tolerância a falhas\n— latência por região', 3: 'P não é opcional! Em partição: escolher C ou A.' },
-  draft: '', anon: true, cooldown: 0, nextId: 100, questions: SEED_Q, pinned: null, moderation: true,
-  reacts: [], rId: 0, totals: { fogo: 128, palmas: 96, uau: 41 }, poll: IDLE_POLL, elapsed: 18 * 60 + 32, online: 287, showQr: true,
-}
-
-const addReact = (s: S, kind: Kind) => ({ reacts: [...s.reacts, { id: s.rId, kind, left: 6 + Math.random() * 82, born: Date.now() }], rId: s.rId + 1 })
-
-/** One simulated second of a live room. */
-function tick(s: S): Partial<S> {
-  const e = s.elapsed + 1, now = Date.now()
-  let p: Partial<S> = { elapsed: e, cooldown: Math.max(0, s.cooldown - 1), reacts: s.reacts.filter(r => now - r.born < 2900) }
-  if (Math.random() < 0.4) p = { ...p, ...addReact({ ...s, reacts: p.reacts! }, (['fogo', 'palmas', 'uau'] as const)[Math.floor(Math.random() * 3)]) }
-  if (e % 3 === 0) p.online = clamp(s.online + Math.round(Math.random() * 8 - 4), 250, 320)
-  if (e % 4 === 0) {
-    const pool = s.questions.filter(q => q.status === 'approved' && !q.answered).sort((a, b) => b.votes - a.votes).slice(0, 3)
-    const pick = pool[Math.floor(Math.random() * pool.length)]
-    if (pick) p.questions = s.questions.map(q => (q.id === pick.id ? { ...q, votes: q.votes + 1 } : q))
-  }
-  if (s.poll.status === 'open') {
-    const votes = [...s.poll.votes], w = [0.46, 0.3, 0.14, 0.1]
-    for (let n = 1 + Math.floor(Math.random() * 4); n > 0; n--) {
-      let x = Math.random()
-      const j = w.findIndex(wi => (x -= wi) < 0)
-      votes[j < 0 ? 3 : j]++
-    }
-    p.poll = { ...s.poll, votes }
-  }
-  return p
-}
 
 function Panel({ title, path, children, className }: { title: string; path?: string; children: ReactNode; className?: string }) {
   return (
-    <section aria-label={title} className={cx('glass flex flex-col rounded-[2rem] p-4 sm:p-5', className)}>
+    <section aria-label={title} className={cx('glass flex min-w-0 flex-col rounded-[2rem] p-4 sm:p-5', className)}>
       <div className="mb-4 flex items-center justify-between gap-3 px-1">
         <h2 className="font-display text-lg font-semibold text-white">{title}</h2>
         {path && <span className="truncate font-mono text-xs text-emerald-100/45">{path}</span>}
@@ -83,81 +34,12 @@ function VoteBtn({ q, onVote }: { q: Question; onVote: () => void }) {
 }
 
 export default function Live() {
-  const [s, setS] = useState(INIT)
-  const up = (f: (s: S) => Partial<S>) => setS(prev => ({ ...prev, ...f(prev) }))
-  const [toast, setToast] = useState('')
-  const [saving, setSaving] = useState(false)
-  const saveT = useRef(0)
+  const r = useRoom()
+  const {
+    s, up, toast, saving, eff, approved, pending, hidden, audQs, hot, pct, pollLabel, timeFrac, timer,
+    go, audGo, vote, answer, pin, setStatus, merge, react, sendQ, onNote, pickPoll, launchPoll, closePoll, newPoll, togglePollStage,
+  } = r
 
-  useEffect(() => { const iv = setInterval(() => up(tick), 1000); return () => clearInterval(iv) }, [])
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2600); return () => clearTimeout(t) }, [toast])
-  useEffect(() => () => clearTimeout(saveT.current), [])
-
-  // Derived state
-  const eff = s.follow ? s.cur : Math.min(s.audView, s.cur)
-  const approved = s.questions.filter(q => q.status === 'approved').sort(byRank)
-  const pending = s.questions.filter(q => q.status === 'pending')
-  const hidden = s.questions.filter(q => q.status === 'hidden')
-  const audQs = s.questions.filter(q => q.status === 'approved' || (q.mine && q.status === 'pending')).sort(byRank)
-  const hot = approved.find(q => !q.answered && q.votes >= 30 && s.pinned !== q.id)
-  const pinnedQ = s.questions.find(q => q.id === s.pinned && q.status === 'approved')
-  const total = s.poll.votes.reduce((a, b) => a + b, 0)
-  const pct = (v: number) => (total ? Math.round((v / total) * 100) : 0)
-  const pollLabel = s.poll.status === 'idle' ? 'Pronta para lançar' : `${s.poll.status === 'open' ? 'Votação aberta' : 'Encerrada'} · ${total} votos`
-  const timeFrac = Math.min(1, s.elapsed / TOTAL_SEC)
-  const timer = `${pad(Math.floor(s.elapsed / 60))}:${pad(s.elapsed % 60)}`
-
-  // Actions
-  const go = (i: number) => up(() => ({ cur: clamp(i, 0, N - 1) }))
-  const audGo = (i: number) => up(p => (i < 0 || i > p.cur ? {} : i === p.cur ? { follow: true } : { follow: false, audView: i }))
-  const mapQ = (id: string, f: (q: Question) => Partial<Question>) => up(p => ({ questions: p.questions.map(q => (q.id === id ? { ...q, ...f(q) } : q)) }))
-  const vote = (id: string) => mapQ(id, q => ({ voted: !q.voted, votes: q.votes + (q.voted ? -1 : 1) }))
-  const answer = (id: string) => mapQ(id, q => ({ answered: !q.answered }))
-  const pin = (id: string) => up(p => ({ pinned: p.pinned === id ? null : id }))
-  const setStatus = (id: string, status: Question['status']) => {
-    mapQ(id, () => ({ status }))
-    if (status === 'hidden') up(p => (p.pinned === id ? { pinned: null } : {}))
-  }
-  const merge = (id: string) => up(p => {
-    const src = p.questions.find(q => q.id === id)
-    if (!src?.dupOf) return {}
-    return { questions: p.questions.map(q => (q.id === id ? { ...q, status: 'merged' as const } : q.id === src.dupOf ? { ...q, votes: q.votes + src.votes + 1 } : q)) }
-  })
-  const react = (k: Kind) => up(p => ({ ...addReact(p, k), totals: { ...p.totals, [k]: p.totals[k] + 1 } }))
-  const sendQ = () => {
-    const t = s.draft.trim()
-    if (!t || t.length > 280 || s.cooldown > 0) return
-    const status = s.moderation ? 'pending' : 'approved'
-    up(p => ({
-      questions: [...p.questions, { id: 'q' + p.nextId, text: t, author: p.anon ? 'Anônimo' : 'Você', slide: eff, votes: 0, voted: false, status, answered: false, mine: true }],
-      draft: '', cooldown: 20, nextId: p.nextId + 1,
-    }))
-    setToast(status === 'pending' ? 'Pergunta enviada para a moderação.' : 'Pergunta publicada.')
-  }
-  const onNote = (v: string) => {
-    up(p => ({ notes: { ...p.notes, [eff]: v } }))
-    setSaving(true)
-    clearTimeout(saveT.current)
-    saveT.current = window.setTimeout(() => setSaving(false), 800)
-  }
-  const pickPoll = (i: number) => up(p => (p.poll.status !== 'open' || p.poll.myVote !== null ? {} : { poll: { ...p.poll, myVote: i, votes: p.poll.votes.map((v, j) => (j === i ? v + 1 : v)) } }))
-
-  // Clicker / keyboard shortcuts (ignored while typing).
-  const keyRef = useRef<(e: KeyboardEvent) => void>(null)
-  const onKey = (e: KeyboardEvent) => {
-    if ((e.target as HTMLElement).closest('input, textarea')) return
-    const k = e.key
-    if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); go(s.cur + 1) }
-    else if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); go(s.cur - 1) }
-    else if (k === 'p' || k === 'P') up(p => ({ pinned: p.questions.filter(q => q.status === 'approved' && !q.answered && q.id !== p.pinned).sort((a, b) => b.votes - a.votes)[0]?.id ?? null }))
-    else if (k === 'q' || k === 'Q') up(p => ({ showQr: !p.showQr }))
-  }
-  useEffect(() => { keyRef.current = onKey })
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => keyRef.current?.(e)
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [])
 
   const pinBtn = (q: Question, short?: boolean) => (
     <button onClick={() => pin(q.id)} className={btn(s.pinned === q.id ? 'accent' : 'ghost', 'sm')}>
@@ -181,46 +63,13 @@ export default function Live() {
         <Link to="/relatorio" className={btn('ghost', 'sm')}>Encerrar e ver relatório</Link>
       </header>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_400px]">
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
         {/* Stage */}
         <Panel title="Telão" path="/stage/849201">
-          <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">
-            <Slide s={DECK[s.cur]} />
-            {s.showQr ? (
-              <div className="glass absolute right-[2%] top-[3%] flex w-[16%] min-w-20 flex-col items-center rounded-2xl p-[1%]">
-                <QR className="w-full rounded-lg" />
-                <div className="mt-1 text-[clamp(8px,0.9vw,12px)] text-emerald-100/70">Entre com o PIN</div>
-                <div className="font-mono text-[clamp(9px,1.1vw,15px)] font-medium tracking-wider text-orange-300">{PIN}</div>
-              </div>
-            ) : (
-              <div className="glass absolute right-[2%] top-[3%] rounded-full px-3 py-1 font-mono text-xs text-orange-200">PIN {PIN}</div>
-            )}
-            <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-full">
-              {s.reacts.map(r => (
-                <span key={r.id} className={cx('liquid animate-rise absolute bottom-[6%] grid size-[clamp(28px,3.6vw,48px)] place-items-center rounded-full bg-gradient-to-b text-[clamp(14px,1.8vw,24px)]', R_BG[r.kind])} style={{ left: r.left + '%' }}>{EMOJI[r.kind]}</span>
-              ))}
-            </div>
-            {s.poll.status !== 'idle' && s.poll.onStage && (
-              <div className="glass animate-fade-up absolute bottom-[4%] left-[3%] w-[min(46%,420px)] rounded-2xl p-[1.5%] text-[clamp(9px,1vw,14px)]">
-                <div className="font-semibold text-orange-300">Enquete · {total} votos</div>
-                <div className="mt-1 font-display font-semibold text-white">{POLL.q}</div>
-                <div className="mt-2 space-y-1.5">
-                  {POLL.options.map((o, i) => (
-                    <div key={o}><div className="flex justify-between gap-2 text-emerald-50"><span className="truncate">{o}</span><span>{pct(s.poll.votes[i])}%</span></div><Bar pct={pct(s.poll.votes[i])} /></div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {pinnedQ && (
-              <div className="glass animate-fade-up absolute inset-x-[3%] bottom-[4%] rounded-2xl border-orange-300/40 p-[1.6%] text-[clamp(10px,1.2vw,16px)]">
-                <div className="flex flex-wrap items-center gap-2 text-[0.8em]"><Chip tone="orange">Pergunta no palco</Chip><span className="text-emerald-100/60">Slide {pinnedQ.slide + 1} · {pinnedQ.votes} votos · {pinnedQ.author}</span></div>
-                <div className="mt-1 font-display text-[1.4em] font-semibold leading-snug text-white">{pinnedQ.text}</div>
-              </div>
-            )}
-          </div>
+          <Stage r={r} />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-emerald-100/55">
             <span className="font-semibold text-white">Slide {s.cur + 1} de {N}</span>
-            <span>Passador: <kbd className="font-mono">→</kbd> próximo · <kbd className="font-mono">←</kbd> anterior · <kbd className="font-mono">P</kbd> destaca a pergunta mais votada · <kbd className="font-mono">Q</kbd> mostra/oculta o QR</span>
+            <span className="min-w-0">Passador: <kbd className="font-mono">→</kbd> próximo · <kbd className="font-mono">←</kbd> anterior · <kbd className="font-mono">P</kbd> destaca a pergunta mais votada · <kbd className="font-mono">Q</kbd> mostra/oculta o QR</span>
           </div>
         </Panel>
 
@@ -281,7 +130,7 @@ export default function Live() {
                   <textarea id="pergunta" value={s.draft} onChange={e => up(() => ({ draft: e.target.value.slice(0, 280) }))} placeholder="Escreva sua pergunta" rows={3}
                     className="mt-1.5 w-full resize-none rounded-2xl border border-white/12 bg-white/5 p-3 text-sm text-white placeholder:text-emerald-100/35 focus:border-emerald-300/50 focus:outline-none" />
                   <div className="mt-1.5 flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs text-emerald-50"><input type="checkbox" checked={s.anon} onChange={() => up(p => ({ anon: !p.anon }))} className="accent-emerald-400" /> Anônimo</label>
+                    <Check on={s.anon} onChange={v => up(() => ({ anon: v }))} className="text-xs text-emerald-50">Anônimo</Check>
                     <span className={cx('ml-auto text-xs', s.draft.length > 250 ? 'text-orange-300' : 'text-emerald-100/50')}>{s.draft.length}/280</span>
                     <button onClick={sendQ} disabled={!s.draft.trim() || s.cooldown > 0} className={btn('primary', 'sm')}>{s.cooldown > 0 ? `Aguarde ${s.cooldown}s` : 'Enviar'}</button>
                   </div>
@@ -346,14 +195,14 @@ export default function Live() {
 
         {/* Presenter console */}
         <Panel title="Palestrante" path="/presenter/sess_abc123">
-          <div className="grid gap-3 sm:grid-cols-[1.3fr_1fr_1fr_auto]">
+          <div className="grid grid-cols-3 gap-3">
             <div className="glass-soft rounded-2xl p-3">
               <div className="flex items-baseline gap-2"><span className="font-mono text-2xl font-medium text-white">{timer}</span><span className="text-xs text-emerald-100/50">de 45:00</span></div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className={cx('h-full rounded-full transition-all', timeFrac > 0.85 ? 'bg-orange-400' : 'bg-emerald-400')} style={{ width: timeFrac * 100 + '%' }} /></div>
             </div>
             <div className="glass-soft rounded-2xl p-3"><div className="text-xs text-emerald-100/55">Público</div><div className="font-display text-2xl font-bold text-white">{s.online}</div></div>
             <div className="glass-soft rounded-2xl p-3"><div className="text-xs text-emerald-100/55">Perguntas</div><div className="font-display text-2xl font-bold text-orange-300">{approved.length}</div></div>
-            <div className="flex items-center gap-2">
+            <div className="col-span-3 flex items-center gap-2">
               <button onClick={() => go(s.cur - 1)} disabled={s.cur === 0} className={btn('ghost', 'lg', 'flex-1')}>‹ Anterior</button>
               <button onClick={() => go(s.cur + 1)} disabled={s.cur === N - 1} className={btn('primary', 'lg', 'flex-1')}>Próximo ›</button>
             </div>
@@ -361,7 +210,7 @@ export default function Live() {
 
           {hot && (
             <div className="animate-fade-up mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-orange-300/35 bg-orange-400/10 p-3">
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-56">
                 <div className="text-xs font-semibold text-orange-300">🔥 Pergunta em alta · {hot.votes} votos · Slide {hot.slide + 1}</div>
                 <div className="mt-0.5 text-sm text-white">{hot.text}</div>
               </div>
@@ -370,7 +219,7 @@ export default function Live() {
             </div>
           )}
 
-          <div className="mt-4 grid gap-4 md:grid-cols-[1.4fr_1fr]">
+          <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
             <div>
               <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-emerald-300">Agora · Slide {s.cur + 1}</div>
               <div className="overflow-hidden rounded-2xl ring-2 ring-emerald-400/50"><Slide s={DECK[s.cur]} /></div>
@@ -399,7 +248,7 @@ export default function Live() {
             ))}
           </div>
 
-          <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
             <div className="glass-soft rounded-2xl p-3">
               <H3 aside={<span className="text-xs text-emerald-100/45">ordenada por votos</span>}>Fila de perguntas</H3>
               <ul className="space-y-2">
@@ -430,10 +279,10 @@ export default function Live() {
                 </div>
               )}
               <div className="mt-3 flex flex-wrap gap-2">
-                {s.poll.status === 'idle' && <button onClick={() => up(() => ({ poll: { ...IDLE_POLL, status: 'open', onStage: true } }))} className={btn('accent', 'sm')}>Lançar enquete</button>}
-                {s.poll.status === 'open' && <button onClick={() => up(p => ({ poll: { ...p.poll, status: 'closed' } }))} className={btn('ghost', 'sm')}>Encerrar votação</button>}
-                {s.poll.status === 'closed' && <button onClick={() => up(() => ({ poll: IDLE_POLL }))} className={btn('ghost', 'sm')}>Nova enquete</button>}
-                {s.poll.status !== 'idle' && <button onClick={() => up(p => ({ poll: { ...p.poll, onStage: !p.poll.onStage } }))} className={btn('quiet', 'sm')}>{s.poll.onStage ? 'Ocultar do telão' : 'Mostrar no telão'}</button>}
+                {s.poll.status === 'idle' && <button onClick={launchPoll} className={btn('accent', 'sm')}>Lançar enquete</button>}
+                {s.poll.status === 'open' && <button onClick={closePoll} className={btn('ghost', 'sm')}>Encerrar votação</button>}
+                {s.poll.status === 'closed' && <button onClick={newPoll} className={btn('ghost', 'sm')}>Nova enquete</button>}
+                {s.poll.status !== 'idle' && <button onClick={togglePollStage} className={btn('quiet', 'sm')}>{s.poll.onStage ? 'Ocultar do telão' : 'Mostrar no telão'}</button>}
               </div>
             </div>
           </div>
@@ -444,7 +293,7 @@ export default function Live() {
           <div className="glass-soft mb-4 rounded-2xl p-3 sm:max-w-md">
             <Switch on={s.moderation} onChange={() => up(p => ({ moderation: !p.moderation }))} label="Moderar antes de publicar" />
           </div>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-3 [&>*]:min-w-0">
             <div>
               <H3>Aguardando · {pending.length}</H3>
               {!pending.length && <p className="glass-soft rounded-2xl p-4 text-sm text-emerald-100/55">Nada na fila.</p>}

@@ -1,176 +1,155 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink } from 'react-router'
-import type { SlideData } from '../data'
-import { DECK, DECK_TITLE, PIN } from '../data'
-import { QR, Slide } from '../Slide'
-import { btn, Chip, cx, Logo, Segmented, Switch } from '../ui'
+import { Link, useNavigate } from 'react-router'
+import { useSession } from '../Auth'
+import { fmtPin, listDecks, listSessions, minutes, uploadPdf, type DeckListItem, type SessionSummary } from '../decks'
+import { DeckSlide } from '../HtmlSlide'
+import { Icon, PaneHead, Stat, Studio } from '../Studio'
+import { btn, Chip, cx, LiveDot } from '../ui'
 
-type Fmt = 'pdf' | 'pptx'
-const STEPS: Record<Fmt, [string, string][]> = {
-  pdf: [
-    ['Enviando ao armazenamento', 'Upload do PDF original'],
-    ['Renderizando páginas', 'Leitura página a página do PDF'],
-    ['Gerando imagens WebP', '1920×1080 para o telão e 1280×720 para celular'],
-    ['Extraindo texto', 'Texto puro para busca e leitores de tela'],
-    ['Pronto', 'Apresentação disponível na biblioteca'],
-  ],
-  pptx: [
-    ['Enviando ao armazenamento', 'Upload do .pptx original'],
-    ['Convertendo para PDF', 'LibreOffice headless preserva fontes e layout'],
-    ['Gerando imagens WebP', '1920×1080 para o telão e 1280×720 para celular'],
-    ['Extraindo texto e notas', 'Inclui as notas do orador do PowerPoint'],
-    ['Pronto', 'Apresentação disponível na biblioteca'],
-  ],
-}
-type Deck = { id: string; title: string; slides: number; ready: boolean; when: string; cover: SlideData }
-const cover = (kicker: string, title: string, sub: string): SlideData => ({ kind: 'cover', kicker, title, sub, foot: '[SEU NOME] · [EVENTO]' })
-const BASE: Deck[] = [
-  { id: 'd1', title: DECK_TITLE, slides: 12, ready: true, when: 'Atualizada há 2 dias', cover: DECK[0] },
-  { id: 'd2', title: 'Filas e mensageria sem mistério', slides: 18, ready: true, when: 'Atualizada há 3 semanas', cover: cover('Workshop', 'Filas e mensageria sem mistério', 'Quando usar fila, tópico ou stream — e como não perder mensagens') },
-]
+const when = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 
-export function SideNav() {
-  const item = ({ isActive }: { isActive: boolean }) => cx('rounded-full px-4 py-2 text-sm font-medium transition whitespace-nowrap', isActive ? 'liquid bg-white/15 text-white' : 'text-emerald-100/70 hover:bg-white/5 hover:text-white')
-  return (
-    <nav aria-label="Menu principal" className="glass sticky top-3 z-20 m-3 flex items-center gap-2 overflow-x-auto rounded-3xl p-3 lg:fixed lg:inset-y-3 lg:left-3 lg:m-0 lg:w-60 lg:flex-col lg:items-stretch lg:overflow-visible lg:p-5">
-      <div className="mr-2 lg:mb-6 lg:mr-0"><Logo /></div>
-      <NavLink to="/upload" className={item}>Apresentações</NavLink>
-      <NavLink to="/live" className={item}>Sessão ao vivo</NavLink>
-      <NavLink to="/relatorio" className={item}>Relatórios</NavLink>
-      <div className="ml-auto flex items-center gap-3 lg:ml-0 lg:mt-auto">
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-orange-400 text-xs font-bold text-ink">SN</span>
-        <span className="hidden text-sm leading-tight lg:block"><span className="block font-semibold text-white">[SEU NOME]</span><span className="text-emerald-100/55">Conta Google</span></span>
-      </div>
-    </nav>
-  )
-}
-
+/** Library: upload a PDF, browse decks (each opens its detail hub), recent sessions. */
 export default function Upload() {
-  const [fmt, setFmt] = useState<Fmt>('pptx')
-  const [pct, setPct] = useState<number | null>(null)
-  const [decks, setDecks] = useState(BASE)
-  const [modal, setModal] = useState<string | null>(null)
-  const [freeNav, setFreeNav] = useState(true)
-  const [moderation, setModeration] = useState(false)
-  const timers = useRef<number[]>([])
-  useEffect(() => () => timers.current.forEach(clearInterval), [])
+  const user = useSession()?.user
+  const first = (user?.user_metadata.full_name as string | undefined)?.split(' ')[0]
+  const nav = useNavigate()
+  const [decks, setDecks] = useState<DeckListItem[] | null>(null)
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [query, setQuery] = useState('')
+  const [up, setUp] = useState<{ name: string; done: number; total: number } | null>(null)
+  const [error, setError] = useState('')
+  const [drag, setDrag] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  const uid = user?.id
 
-  const start = () => {
-    const id = 'd' + Date.now()
-    setDecks(d => [{ id, title: 'Workshop de Observabilidade', slides: 24, ready: false, when: 'Enviada agora', cover: cover('Workshop', 'Workshop de Observabilidade', 'Logs, métricas e traces que respondem perguntas reais') }, ...d])
-    setPct(0)
-    const step = fmt === 'pdf' ? 2.2 : 1.4
-    let p = 0
-    const iv = window.setInterval(() => {
-      p = Math.min(100, p + step)
-      setPct(p)
-      if (p >= 100) {
-        clearInterval(iv)
-        setDecks(d => d.map(x => (x.id === id ? { ...x, ready: true } : x)))
-        timers.current.push(window.setTimeout(() => setPct(null), 2200))
-      }
-    }, 120)
-    timers.current.push(iv)
+  useEffect(() => {
+    if (!uid) return
+    Promise.all([listDecks(uid), listSessions({ owner_id: uid })])
+      .then(([d, s]) => { setDecks(d); setSessions(s) })
+      .catch(e => setError(e.message))
+  }, [uid])
+
+  const send = async (file?: File) => {
+    if (!file || up) return
+    setError('')
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf')
+      return setError('Envie um PDF. No PowerPoint ou Keynote: Arquivo → Exportar → PDF.')
+    setUp({ name: file.name, done: 0, total: 0 })
+    try {
+      const id = await uploadPdf(file, (done, total) => setUp({ name: file.name, done, total }))
+      nav(`/deck/${id}`)
+    } catch (e) {
+      setError((e as Error).message)
+      setUp(null)
+      if (uid) listDecks(uid).then(setDecks)
+    }
   }
 
-  const active = pct === null ? 0 : pct >= 100 ? 4 : Math.min(3, Math.floor(pct / 25))
-  const fileName = fmt === 'pdf' ? 'workshop-observabilidade.pdf' : 'workshop-observabilidade.pptx'
+  const live = sessions.find(s => s.status === 'live')
+  const people = sessions.reduce((a, s) => a + (s.participants[0]?.count ?? 0), 0)
+  const qs = sessions.reduce((a, s) => a + (s.questions[0]?.count ?? 0), 0)
+  const shown = (decks ?? []).filter(d => d.title.toLowerCase().includes(query.trim().toLowerCase()))
+  const pct = up?.total ? Math.round((up.done / up.total) * 100) : 0
+  const oldest = sessions.at(-1)
 
   return (
-    <div className="lg:pl-66">
-      <SideNav />
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 lg:py-10">
-        <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">Suas apresentações</h1>
-        <p className="mt-2 max-w-2xl text-emerald-100/65">Envie um PDF ou PowerPoint. Cada página vira uma imagem leve para celular e uma em alta para o telão.</p>
+    <Studio
+      kicker={first ? <>Olá, {first}</> : 'Estúdio'}
+      title="Suas apresentações"
+      sub="Envie um PDF. Depois abra a apresentação para planejar o tempo, entrar ao vivo e ver os relatórios."
+      actions={live && <Link to={`/presenter/${live.id}`} className={btn('accent', 'md')}><LiveDot />Ao vivo · PIN {fmtPin(live.pin)}</Link>}
+    >
+      {error && <p role="alert" className="mb-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</p>}
 
-        <section aria-label="Enviar apresentação" className="glass mt-8 rounded-[2rem] p-5 sm:p-7">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-display text-xl font-semibold text-white">Nova apresentação</h2>
-            <Segmented label="Formato do arquivo" value={fmt} onChange={setFmt} disabled={pct !== null}
-              options={[{ v: 'pdf', label: 'PDF' }, { v: 'pptx', label: 'PowerPoint (.pptx)' }]} />
-          </div>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <Stat accent label="Pessoas alcançadas" icon="users" value={people} hint={`em ${sessions.length} sessões`} />
+        <Stat label="Sessões realizadas" icon="live" value={sessions.length} hint={oldest ? `desde ${when(oldest.started_at)}` : 'nenhuma ainda'} />
+        <Stat label="Perguntas recebidas" icon="message" value={qs} hint={sessions.length ? `média de ${Math.round(qs / sessions.length)} por sessão` : '—'} />
+        <Stat label="Apresentações" icon="library" value={decks?.length ?? '—'} hint={`${(decks ?? []).filter(d => d.status === 'ready').length} prontas para o palco`} />
+      </div>
 
-          {pct === null ? (
-            <div className="mt-5 flex flex-col items-center rounded-3xl border-2 border-dashed border-emerald-300/25 bg-emerald-400/[0.03] px-6 py-12 text-center transition hover:border-orange-300/50 hover:bg-orange-400/[0.04]">
-              <div className="liquid grid size-14 place-items-center rounded-2xl bg-gradient-to-b from-emerald-300 to-emerald-500 text-ink">
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 16V4" /><path d="m6 10 6-6 6 6" /><path d="M4 20h16" /></svg>
-              </div>
-              <div className="mt-4 font-display text-lg font-semibold text-white">Arraste o arquivo aqui</div>
-              <p className="mt-1 max-w-lg text-sm text-emerald-100/60">{fmt === 'pdf' ? 'O jeito mais rápido: exporte seus slides como PDF. Fontes e layout chegam exatamente como no seu computador.' : 'Envie o PowerPoint direto. Convertemos no servidor para que fontes e layout não quebrem no celular de ninguém, e aproveitamos suas notas do orador.'}</p>
-              <button onClick={start} className={btn('primary', 'md', 'mt-5')}>Escolher {fmt === 'pdf' ? 'PDF' : 'arquivo .pptx'}</button>
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section aria-label="Enviar apresentação" className="pane rounded-[2rem] p-5 sm:p-6">
+          <PaneHead title="Nova apresentação" sub="Convertida no seu navegador, página a página" />
+          {!up ? (
+            <div onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
+              onDrop={e => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files[0]) }}
+              className={cx('mt-5 flex flex-col items-center rounded-3xl border-2 border-dashed px-6 py-10 text-center transition duration-200',
+                drag ? 'border-orange-300/70 bg-orange-400/10' : 'border-emerald-300/20 bg-emerald-400/[0.03] hover:border-orange-300/45 hover:bg-orange-400/[0.04]')}>
+              <div className="liquid grid size-14 place-items-center rounded-2xl bg-gradient-to-b from-emerald-300 to-emerald-500 text-ink"><Icon name="upload" className="size-6" /></div>
+              <div className="mt-4 font-display text-lg font-semibold text-white">Arraste o PDF aqui</div>
+              <p className="mt-1 max-w-lg text-pretty text-sm text-emerald-100/60">Fontes e layout chegam exatamente como no seu computador. Usa PowerPoint ou Keynote? Exporte como PDF antes.</p>
+              <input ref={input} type="file" accept="application/pdf,.pdf" className="sr-only" tabIndex={-1} onChange={e => send(e.target.files?.[0])} />
+              <button onClick={() => input.current?.click()} className={btn('primary', 'md', 'mt-5')}>Escolher PDF</button>
             </div>
           ) : (
             <div className="animate-fade-up mt-5">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-mono text-emerald-50">{fileName}</span>
-                <span className="font-semibold text-orange-300">{pct >= 100 ? 'Concluído' : Math.round(pct) + '%'}</span>
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="flex min-w-0 items-center gap-2 font-mono text-emerald-50"><Icon name="file" className="size-4 text-emerald-300" /><span className="truncate">{up.name}</span></span>
+                <span className="font-semibold tabular-nums text-orange-300">{up.total ? `${up.done}/${up.total} páginas` : 'Lendo PDF…'}</span>
               </div>
-              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/8" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label="Progresso da conversão">
-                <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-lime-300 to-orange-400 transition-all" style={{ width: pct + '%' }} />
+              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/8" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Progresso da conversão">
+                <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-lime-300 to-orange-400 transition-[width] duration-300" style={{ width: pct + '%' }} />
               </div>
-              <ol className="mt-5 grid gap-2 sm:grid-cols-5">
-                {STEPS[fmt].map(([title, detail], i) => {
-                  const done = i < active || pct >= 100, on = i === active && pct < 100
-                  return (
-                    <li key={title} className={cx('rounded-2xl border p-3 transition', on ? 'border-orange-300/40 bg-orange-400/10' : done ? 'border-emerald-300/25 bg-emerald-400/8' : 'border-white/8 bg-white/[0.03]')}>
-                      <span className={cx('grid size-6 place-items-center rounded-full text-xs font-bold', done ? 'bg-emerald-400 text-ink' : on ? 'bg-orange-400 text-ink' : 'bg-white/10 text-emerald-100/60')}>{done ? '✓' : i + 1}</span>
-                      <div className="mt-2 text-sm font-semibold text-white">{title}</div>
-                      <div className="mt-0.5 text-xs text-emerald-100/55">{detail}</div>
-                    </li>
-                  )
-                })}
-              </ol>
+              <p className="mt-3 text-sm text-emerald-100/60">Gerando imagens 1920×1080 para o telão e 1280×720 para celular. Não feche esta aba.</p>
             </div>
           )}
         </section>
 
-        <section aria-label="Biblioteca" className="mt-10">
-          <h2 className="font-display text-xl font-semibold text-white">Biblioteca</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {decks.map(d => (
-              <article key={d.id} className="glass animate-fade-up flex flex-col rounded-3xl p-3">
-                <div className="overflow-hidden rounded-2xl ring-1 ring-white/10"><Slide s={d.cover} /></div>
+        <section aria-label="Últimas sessões" className="pane flex flex-col rounded-[2rem] p-5">
+          <PaneHead title="Últimas sessões" aside={sessions.length > 0 && <Link to="/relatorio" className="text-sm font-medium text-orange-300 hover:text-orange-200">Ver todas</Link>} />
+          {sessions.length === 0 && <p className="mt-4 text-sm text-emerald-100/55">Seus relatórios aparecem aqui depois da primeira sessão.</p>}
+          <ul className="mt-3 divide-y divide-white/8">
+            {sessions.slice(0, 4).map(s => (
+              <li key={s.id}>
+                <Link to={s.status === 'live' ? `/presenter/${s.id}` : `/relatorio/${s.id}`} className="group -mx-2 flex items-center gap-3 rounded-2xl px-2 py-3 transition hover:bg-white/5">
+                  <span className={cx('grid size-10 shrink-0 place-items-center rounded-xl', s.status === 'live' ? 'bg-orange-400/15 text-orange-300' : 'bg-white/6 text-emerald-200')}><Icon name={s.status === 'live' ? 'live' : 'chart'} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-white">{s.decks?.title ?? 'Apresentação'}</span>
+                    <span className="block text-xs tabular-nums text-emerald-100/50">{s.status === 'live' ? 'Ao vivo agora' : `${when(s.started_at)} · ${minutes(s)} min`} · {s.participants[0]?.count ?? 0} pessoas · {s.questions[0]?.count ?? 0} perguntas</span>
+                  </span>
+                  <Icon name="next" className="size-4 text-emerald-100/40 transition group-hover:translate-x-0.5 group-hover:text-white" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      <section aria-label="Biblioteca" className="mt-10">
+        <PaneHead title="Biblioteca" sub={decks ? `${decks.length} apresentações` : 'Carregando…'} aside={
+          <label className="glass-soft flex h-11 w-full items-center gap-2 rounded-full px-4 text-emerald-100/60 focus-within:ring-2 focus-within:ring-orange-400/60 sm:w-72">
+            <Icon name="search" className="size-4" />
+            <span className="sr-only">Buscar apresentação</span>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar apresentação" className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-emerald-100/40" />
+          </label>
+        } />
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {!decks && !error && [0, 1, 2].map(i => <div key={i} className="pane aspect-[4/3] animate-pulse rounded-3xl" />)}
+          {shown.map(d => {
+            const isLive = d.sessions.some((s: { status: string }) => s.status === 'live')
+            return (
+              <Link key={d.id} to={`/deck/${d.id}`} className="pane group animate-fade-up flex flex-col rounded-3xl p-3 transition duration-200 hover:-translate-y-0.5 hover:border-white/20">
+                <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
+                  {d.slides[0] ? <DeckSlide deck={d} idx={0} small className="pointer-events-none" /> : <div className="grid aspect-video place-items-center bg-black/30 text-sm text-emerald-100/50">Sem prévia</div>}
+                </div>
                 <div className="flex items-start justify-between gap-2 px-2 pt-4">
                   <h3 className="font-display font-semibold leading-snug text-white">{d.title}</h3>
-                  <Chip tone={d.ready ? 'green' : 'orange'}>{d.ready ? 'Pronta' : 'Processando'}</Chip>
+                  {isLive ? <Chip tone="orange" className="shrink-0"><LiveDot />Ao vivo</Chip>
+                    : d.status === 'ready' ? <Chip tone="green" className="shrink-0">Pronta</Chip>
+                    : d.status === 'error' ? <Chip tone="red" className="shrink-0">Falhou</Chip>
+                    : <Chip tone="orange" className="shrink-0">Processando</Chip>}
                 </div>
-                <div className="px-2 pt-1 text-sm text-emerald-100/55">{d.slides} slides · {d.when}</div>
-                <button onClick={() => setModal(d.title)} disabled={!d.ready} className={btn('accent', 'md', 'm-2 mt-4')}>Iniciar sessão ao vivo</button>
-              </article>
-            ))}
-          </div>
-        </section>
-      </main>
-
-      {modal && (
-        <div className="fixed inset-0 z-40 grid place-items-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
-          <div role="dialog" aria-modal aria-label="Sessão criada" onClick={e => e.stopPropagation()} className="glass animate-fade-up w-full max-w-md rounded-[2rem] p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <Chip tone="orange">Sala aberta</Chip>
-                <h2 className="mt-2 font-display text-xl font-semibold text-white">{modal}</h2>
-              </div>
-              <button onClick={() => setModal(null)} aria-label="Fechar" className={btn('ghost', 'sm', 'size-8 px-0')}>✕</button>
-            </div>
-            <div className="mt-5 flex items-center gap-5">
-              <QR className="w-36 shrink-0" />
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-emerald-100/55">PIN da sessão</div>
-                <div className="mt-1 font-mono text-3xl font-medium tracking-[0.12em] text-orange-300">{PIN}</div>
-                <p className="mt-2 text-xs text-emerald-100/60">O QR Code e o PIN ficam no canto do telão. O público entra sem cadastro.</p>
-              </div>
-            </div>
-            <div className="glass-soft mt-5 space-y-4 rounded-2xl p-4">
-              <Switch on={freeNav} onChange={() => setFreeNav(!freeNav)} label="Navegação livre" hint="O público pode voltar a slides anteriores para terminar notas" />
-              <Switch on={moderation} onChange={() => setModeration(!moderation)} label="Moderar perguntas" hint="Perguntas passam por triagem antes de aparecer" />
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-2">
-              <Link to="/live" className={btn('ghost', 'md')}>Abrir telão</Link>
-              <Link to="/live" className={btn('primary', 'md')}>Abrir console</Link>
-            </div>
-          </div>
+                <div className="flex items-center justify-between gap-2 px-2 pb-1 pt-1 text-sm text-emerald-100/55">
+                  <span>{d.slide_count} slides · {d.duration_min} min · {d.sessions.length} sessões</span>
+                  <Icon name="next" className="size-4 shrink-0 transition group-hover:translate-x-0.5 group-hover:text-white" />
+                </div>
+              </Link>
+            )
+          })}
+          {decks && !shown.length && <p className="col-span-full py-10 text-center text-sm text-emerald-100/50">{query ? `Nenhuma apresentação com “${query}”.` : 'Nenhuma apresentação ainda. Envie o primeiro PDF.'}</p>}
         </div>
-      )}
-    </div>
+      </section>
+    </Studio>
   )
 }

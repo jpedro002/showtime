@@ -5,8 +5,6 @@ import { DECK, PIN } from '../data'
 import { Slide } from '../Slide'
 import { btn, cx, LiveDot, Logo } from '../ui'
 
-const DEMO_PIN = PIN.replace(/\D/g, '')
-
 const Icon = ({ d, className = 'size-5' }: { d: string; className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden><path d={d} /></svg>
 )
@@ -31,7 +29,7 @@ function PinEntry() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (pin === DEMO_PIN) return nav('/live')
+    if (pin.length === 6) return nav(`/join?pin=${pin}`)
     setErr(true)
     setShake(n => n + 1)
   }
@@ -58,7 +56,7 @@ function PinEntry() {
         />
       </div>
       <p id="pin-hint" role={err ? 'alert' : undefined} className={cx('mt-2 text-xs', err ? 'text-rose-300' : 'text-emerald-100/55')}>
-        {err ? 'PIN não encontrado. Confira o número no telão.' : <>Demo: <span className="font-mono text-emerald-100/80">{PIN}</span></>}
+        {err ? 'Digite os 6 números do PIN.' : 'O PIN aparece no telão da apresentação.'}
       </p>
       <button disabled={pin.length < 6} className={btn('accent', 'lg', 'mt-4 w-full cursor-pointer')}>
         Entrar na sessão <Icon d={I.arrow} className="size-4" />
@@ -167,7 +165,7 @@ export default function Home() {
                 <span className="font-mono text-[11px] font-medium uppercase tracking-[0.2em]">Vou apresentar</span>
               </div>
               <h2 className="mt-2 font-display text-lg font-semibold text-white">Seu deck, ao vivo em segundos</h2>
-              <p className="mt-2 flex-1 text-sm text-emerald-100/65">Envie PDF ou PowerPoint e ganhe um PIN para compartilhar com a sala.</p>
+              <p className="mt-2 flex-1 text-sm text-emerald-100/65">Envie o PDF da sua apresentação e ganhe um PIN para compartilhar com a sala.</p>
               <Link to="/upload" className={btn('primary', 'lg', 'mt-4 w-full')}>
                 Entrar e apresentar <Icon d={I.arrow} className="size-4" />
               </Link>
@@ -177,7 +175,7 @@ export default function Home() {
           <div className="animate-enter mt-6 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-100/45" style={enter(5)}>
             <span>Sem app</span><span className="text-orange-400/60">/</span>
             <span>Plateia sem cadastro</span><span className="text-orange-400/60">/</span>
-            <span>PDF · PPTX</span>
+            <span>PDF</span>
           </div>
         </section>
 

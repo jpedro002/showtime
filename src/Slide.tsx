@@ -1,3 +1,4 @@
+import { encode } from 'uqr'
 import type { SlideData } from './data'
 import { cx } from './ui'
 
@@ -103,8 +104,16 @@ function Body({ s }: { s: SlideData }) {
   }
 }
 
-/** Decorative fake QR (seeded, deterministic) — not scannable. */
-export function QR({ seed = 849201, className }: { seed?: number; className?: string }) {
+/** Real QR for `value`; without it, a decorative seeded fake for the demo screens. */
+export function QR({ seed = 849201, value, className }: { seed?: number; value?: string; className?: string }) {
+  if (value) {
+    const m = encode(value, { border: 0 }).data
+    return (
+      <div role="img" aria-label="QR code para entrar na sessão" className={cx('grid aspect-square rounded-xl bg-white p-[6%]', className)} style={{ gridTemplateColumns: `repeat(${m.length}, 1fr)` }}>
+        {m.flat().map((d, i) => <div key={i} className={d ? 'bg-ink' : ''} />)}
+      </div>
+    )
+  }
   const N = 21
   let x = seed % 2147483647
   const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647
