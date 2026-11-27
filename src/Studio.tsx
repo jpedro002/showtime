@@ -31,6 +31,11 @@ const PATHS = {
   file: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6',
   x: 'M18 6 6 18M6 6l12 12',
   screen: 'M3 4h18v12H3zM8 20h8M12 16v4',
+  expand: 'M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5',
+  shrink: 'M3 8h5V3M21 8h-5V3M3 16h5v5M21 16h-5v5',
+  edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  up: 'M18 15l-6-6-6 6',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4z',
 }
 export type IconName = keyof typeof PATHS
 
